@@ -21,6 +21,7 @@
 # RStudio files
 .Rproj
 .Rproj.user/
+Karabash_Spiders_2026.Rproj
 
 # produced vignettes
 vignettes/*.html
