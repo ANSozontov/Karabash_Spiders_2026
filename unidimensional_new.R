@@ -1,9 +1,9 @@
-export = F
+export = T
 multip = 2
-turs   = T
+turs   = "yes"
 # Data load ---------------------------------------------------------------
 library(tidyverse)
-library(parallel)|
+library(parallel)
 theme_set(
     theme_bw() +
         theme(
@@ -32,7 +32,7 @@ long <- dir("data", pattern = "xlsx") %>%
         year = as.factor(year), 
         .after = "site")
 
-if(turs){
+if(turs == "yes"){
     wide <- long %>% 
         select(-num)
 } else {
@@ -90,6 +90,7 @@ res <- list()
 plots <- list()
 tables <- list()
 
+cat("\nData loaded")
 # Models functions --------------------------------------------------------
 models_fit <- function(x){
     x %>% 
@@ -111,19 +112,31 @@ models_fit <- function(x){
         })
 }
 
-models_pred <- function(fits){
-    lapply(fits, function(x){
-        c(if("segmented" %in% class(x)){x$psi[2]}else{numeric()}, seq(1, 32, by = 0.5)) %>% 
-            sort() %>% 
+models_pred_noturs <- function(fit){
+        c(if("segmented" %in% class(fit)){fit$psi[2]}else{numeric()}, seq(1, 32, by = 0.5)) %>%
+            sort() %>%
             unique() %>%
             tibble(
                 km = .,
-                km2 = .^2, 
+                km2 = .^2,
                 kmLog = log(.)
-            ) %>% 
-            mutate(predicted = predict(x, .))
+            ) %>%
+            mutate(predicted = predict(fit, .)) %>% 
+        mutate(tur = "", .before = 1)
     }
-    )}
+
+models_pred_yestur <- function(fit){
+    km_list <- c(if("segmented" %in% class(fit)){fit$psi[2]}else{numeric()}, seq(1, 32, by = 0.5)) %>% 
+        sort() %>% 
+        unique()
+    expand_grid(tur = c(1, 2), km = km_list) %>% 
+        mutate(
+            tur = factor(tur), 
+            km = km,
+            km2 = km^2, 
+            kmLog = log(km)) %>% 
+            mutate(predicted = predict(fit, .))
+    }
 
 manual_aic <- function (a, df_observed = NA, k = 2, simple = TRUE){
     # derived from "AIC.default"    
@@ -149,7 +162,7 @@ manual_aic <- function (a, df_observed = NA, k = 2, simple = TRUE){
     # }
 }
 
-model_viz_supp <- function(df0){
+model_viz_supp_notur <- function(df0){
     df1 <- df0 %>% 
         unite("id", formula, year, sep = " ~ ") %>% 
         pull(id) %>% 
@@ -171,26 +184,79 @@ model_viz_supp <- function(df0){
     # guides(linetype = "none")
 }
 
+model_viz_supp_tur <- function(df0){
+    df0 <- filter(df0, str_detect(formula, "tur"))
+    df1 <- df0 %>%
+        unite("id", formula, year, sep = " ~ ") %>% 
+        pull(id) %>% 
+        str_remove_all(" \\+ tur") %>% 
+        `names<-`(df0$pred, .) %>% 
+        map(~select(.x, tur, km, predicted)) %>% 
+        map_dfr(rbind, .id = "model") %>% 
+        separate(model, into = c("response", "model", "year"), sep = " ~ ") %>% 
+        mutate(tur = fct_relabel(tur, ~paste0("tur ", .x))) 
+    
+    df2 <- div %>% 
+        select_at(c("km", "tur", predicted = df1$response[1], "year")) %>% 
+        mutate(model = NA) %>% 
+        mutate(tur = fct_relabel(tur, ~paste0("tur ", .x))) 
+    
+    df1 %>% 
+        ggplot(aes(x = km, y = predicted,  color = model, linetype = model)) + #
+        geom_point(shape = 21, size = 3, data = df2, color = "black", alpha = 0.5) +
+        geom_line() + 
+        facet_grid(
+            cols = vars(year), 
+            rows = vars(tur),
+            scales = "fixed")  +
+        theme(panel.grid = element_blank())
+    # guides(linetype = "none")
+}
+
+cat("\nFunctions are ready")
 # models count ------------------------------------------------------------
-res$models <- expand_grid(
-    resp = c("abu", "nsp", "nsp30", "shan"), # "abuLog", 
-    formula = c("km", "kmSegmented", "km + km2", "kmLog"), 
-    year = c(2009, 2014)) %>% 
+res$dummy <- expand_grid(
+        resp = c("abu", "nsp", "nsp30", "shan"), # "abuLog", 
+        formula = c("km", "kmSegmented", "km + km2", "kmLog"), 
+        tur = switch (turs, yes = c(" + tur", ""), no = ""), 
+        year = c(2009, 2014)) %>% 
     mutate(
-        formula = paste0(resp, " ~ ", formula)) %>% 
-    # slice(-11) %>% 
-    mutate(fits = models_fit(.), 
-           pred = models_pred(fits),
-           aic = map_dbl(fits, ~AIC(.x)), 
-           r2 = map_dbl(fits, ~summary(.x)$adj.r.squared)
+        formula = paste0(resp, " ~ ", formula, tur)) 
+res$fits <- models_fit(res$dummy)
+res$predictions <- res$fits %>% 
+    # `[`(6:8) %>% 
+    lapply(., function(x){
+        if(sum(str_detect(names(coefficients(x)), "tur")) > 0){
+            models_pred_yestur(x)
+        } else {
+            models_pred_noturs(x)
+        }
+    })
+
+res$models <- res$dummy %>% 
+    mutate(
+        fits = res$fits,
+        pred = res$predictions,
+        aic = map_dbl(fits, ~AIC(.x)), 
+        aic2 = map_dbl(fits, ~manual_aic(.x, df_observed = 3)), # 3 -> ...?
+        r2 = map_dbl(fits, ~summary(.x)$adj.r.squared)
     ) %>% 
-    mutate(aic2 = map_dbl(fits, ~manual_aic(.x, df_observed = 3)), 
-           aic2 = case_when(str_detect(formula, "Segm") ~ aic2, TRUE ~ aic),
-           .after = aic) %>% 
-    arrange(resp, year, aic2) %>% 
+    mutate(aic = case_when(str_detect(formula, "Segm") ~ aic2, TRUE ~ aic)) %>% 
+    select(-aic2) %>% 
+    arrange(resp, year, aic) %>% 
     split(.$resp)
 
+if(turs == "yes"){
+    res$models <- map(
+        res$models, 
+        ~filter(.x, str_detect(formula, "tur")))
+} else {
+    res$models <- map(
+        res$models, 
+        ~filter(.x, str_detect(formula, "tur", negate = TRUE)))
+}
 
+cat("\nModels are calculated")
 # Models viz all --------------------------------------------------------------
 
 # Fig. S2. Models all
@@ -203,7 +269,12 @@ my_labs <- list(
          subtitle = "Number of species rarefied to 30 individuals"),
     labs(x = NULL, y = "Shannon index", subtitle = "Diversity")  
 )
-# plots$s2_models.all <- map2(models[-1], my_labs, ~model_viz_supp(.x)+.y)
+
+if(turs == "yes"){
+    plots$s2_models.all <- map2(res$models, my_labs, ~model_viz_supp_tur(.x)+.y)
+} else {
+    plots$s2_models.all <- map2(res$models, my_labs, ~model_viz_supp_notur(.x)+.y)
+}
 
 plots$s2_models.all <- gridExtra::grid.arrange(
     plots$s2_models.all[[1]],
@@ -212,57 +283,73 @@ plots$s2_models.all <- gridExtra::grid.arrange(
     plots$s2_models.all[[4]], 
     ncol = 4
 )
-
-
+cat("\nFigure 1 done")
 # Models selection --------------------------------------------------------
-models %>% 
+tables$models.all <- res$models %>% 
     map_dfr(rbind) %>% 
     unite("id", resp, year) %>% 
     split(.$id) %>% 
-    map(~arrange(select(.x, formula, aic = aic2, r2), aic))
+    map(~arrange(select(.x, formula, aic, r2), aic))
 
 # + Table S3. Models all
-tables$ts3_models.all <- models %>% 
-    map(~select(.x, formula, year, aic = aic2)) %>%
-    map_dfr(~mutate_if(.x, is.numeric, ~round(.x, 2))) %>% 
-    # filter(str_detect(formula, "abu ~ ", negate = TRUE)) %>% 
-    separate(formula, into = c("predictor", "model"), sep = " ~ ") %>% 
-    pivot_wider(names_from = predictor, values_from = aic) %>% 
-    arrange(year, model)
-if(!export){tables$ts3_models.all }
+# tables$ts3_models.all <- res$models %>% 
+#     map(~select(.x, formula, year, aic)) %>%
+#     map_dfr(~mutate_if(.x, is.numeric, ~round(.x, 2))) %>% 
+#     # filter(str_detect(formula, "abu ~ ", negate = TRUE)) %>% 
+#     separate(formula, into = c("predictor", "model"), sep = " ~ ") %>% 
+#     pivot_wider(names_from = predictor, values_from = aic) %>% 
+#     arrange(year, model)
+# if(!export){tables$ts3_models.all }
 
-
+cat("\nTable 1 done")
 # Models viz selected  ----------------------------------------------------
+if(turs == "yes"){
+    plots$models.selected <- res$models %>% 
+        map(~filter(.x, str_detect(formula, "Segm"))) %>% 
+        map2(my_labs, ~model_viz_supp_tur(.x)+.y)
+} else {
+    plots$models.selected <- res$models %>% 
+        map(~filter(.x, str_detect(formula, "Segm"))) %>% 
+        map2(my_labs, ~model_viz_supp_notur(.x)+.y)
+}
+
+plots$models.selected <- gridExtra::grid.arrange(
+    plots$models.selected[[1]],
+    plots$models.selected[[2]], 
+    plots$models.selected[[3]], 
+    plots$models.selected[[4]], 
+    ncol = 4
+)
+
 # Fig. 2. Models selected
-df1 <- models %>% 
-    map_dfr(rbind) %>% 
-    unite("id", formula, year, sep = " ~ ") %>% 
-    pull(id)  %>% 
-    `names<-`(pull(map_dfr(models, ~select(.x, pred)), 1), .) %>% 
-    map_dfr(rbind, .id = "model") %>% 
-    separate(model, into = c("response", "model", "year"), sep = " ~ ") %>% 
-    filter(model == 'kmSegmented') %>% # , response != "abu"
-    select(-km2, -kmLog, -model)
+# df1 <- res$models %>% 
+#     map_dfr(rbind) %>% 
+#     unite("id", formula, year, sep = " ~ ") %>% 
+#     pull(id)  %>% 
+#     `names<-`(pull(map_dfr(res$models, ~select(.x, pred)), 1), .) %>% 
+#     map_dfr(rbind, .id = "model") %>% 
+#     separate(model, into = c("response", "model", "year"), sep = " ~ ") %>% 
+#     filter(str_detect(model, 'kmSegmented')) %>% # , response != "abu"
+#     select(-km2, -kmLog, -model)
 
-df2 <- div %>% 
-    transmute(year = as.character(year), km, abu, nsp, nsp30, shan) %>% 
-    pivot_longer(names_to = "response", values_to = "predicted", -km:-year) 
-plots$f2_models.selected <- df1 %>% 
-    ggplot(aes(x = km, y = predicted, fill = year, color = year, shape = year)) +
-    geom_point(size = 3, data = df2, alpha = 0.5, color = "black") +
-    geom_line() +
-    facet_wrap(~response, scales = "free") +
-    scale_shape_manual(values = c(21, 24)) + 
-    scale_x_continuous(limits = c(0.1, 32)) +
-    theme(panel.grid = element_blank()) +
-    labs(y = NULL, x = "Distanse, km", shape = "Year: ", color = "Year: ", fill = "Year: ")
-if(!export){plots$f2_models.selected}
+# df2 <- div %>% 
+#     transmute(year = as.character(year), km, abu, nsp, nsp30, shan) %>% 
+#     pivot_longer(names_to = "response", values_to = "predicted", -km:-year) 
+# plots$f2_models.selected <- df1 %>% 
+#     ggplot(aes(x = km, y = predicted, fill = year, color = year, shape = year)) +
+#     geom_point(size = 3, data = df2, alpha = 0.5, color = "black") +
+#     geom_line() +
+#     facet_wrap(~response, scales = "free") +
+#     scale_shape_manual(values = c(21, 24)) + 
+#     scale_x_continuous(limits = c(0.1, 32)) +
+#     theme(panel.grid = element_blank()) +
+#     labs(y = NULL, x = "Distanse, km", shape = "Year: ", color = "Year: ", fill = "Year: ")
+# if(!export){plots$f2_models.selected}
 
-
+cat("\nFigure 2 done")
 # Models param selected ---------------------------------------------------
 # Table 2. Models selected comparison
-tables$t2_mod.comps <- models %>% 
-    `[`(-1) %>% 
+tables$t2_mod.comps <- res$models %>% 
     map(~.x %>% 
             filter(str_detect(formula, "Segment")) %>% 
             select(year, fits)
@@ -296,9 +383,41 @@ tables$t2_mod.comps <- models %>%
                 pivot_wider(names_from = year, values_from = E),
             .id = "response"
     )
-if(!export){tables$t2_mod.comps}
-
+# if(!export){tables$t2_mod.comps}
+cat("\nTable 2 done")
 # export ------------------------------------------------------------------
-
-
-# in progress...
+cat("\nExport in progress...")
+if(export){
+    if(turs == "yes"){
+        turs <- "yes.turs"
+    } else {
+        turs <- "no.turs"
+    }
+    writexl::write_xlsx(
+        tables$models.all, 
+        paste0("export/models_all_", turs, "_", Sys.Date(), ".xlsx")
+    )
+    writexl::write_xlsx(
+        tables$t2_mod.comps, 
+        paste0("export/models_selected_", turs, "_", Sys.Date(), ".xlsx")
+    )
+    
+    ggsave(
+        paste0("export/models_all_", turs, "_", Sys.Date(), ".pdf"), 
+        plots$s2_models.all, 
+        height = 210, 
+        width = 297*1.5, 
+        units = "mm", 
+        dpi = 900
+    )
+    
+    ggsave(
+        paste0("export/models_selected_", turs, "_", Sys.Date(), ".pdf"), 
+        plots$models.selected, 
+        height = 210, 
+        width = 297*1.5, 
+        units = "mm", 
+        dpi = 900
+    )
+}
+cat("\nExport is done\n")
