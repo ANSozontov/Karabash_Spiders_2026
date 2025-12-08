@@ -349,6 +349,11 @@ plots$models.selected <- gridExtra::grid.arrange(
 cat("\nFigure 2 done")
 # Models param selected ---------------------------------------------------
 # Table 2. Models selected comparison
+if(turs == "yes"){
+    pred_cols <- c("km", "psi1.km", "tur2")
+} else {
+    pred_cols <- c("km", "psi1.km")
+}
 tables$t2_mod.comps <- res$models %>% 
     map(~.x %>% 
             filter(str_detect(formula, "Segment")) %>% 
@@ -364,7 +369,7 @@ tables$t2_mod.comps <- res$models %>%
                 select(.x[[1]], pred, `Est.` = 2, `St.Err` = 3), 
                 transmute(.x[[2]], pred, `Est.`, `St.Err`)
             ) %>% 
-                filter(Est. != 0, pred %in% c("km", "psi1.km")), 
+                filter(Est. != 0, pred %in% pred_cols), #c("km", "psi1.km")), 
             .id = "year"
             ) %>% 
             split(.$pred) %>% 
