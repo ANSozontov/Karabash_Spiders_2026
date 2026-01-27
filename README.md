@@ -2,4 +2,4 @@
 
 2026
 
-Zolotarev M.P.
+Authors (c)
