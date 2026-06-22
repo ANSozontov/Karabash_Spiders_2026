@@ -178,8 +178,8 @@ model_viz_supp <- function(df0){
 res$models <- expand_grid(
         resp = c("abu", "abuLog", "nsp", "nsp100", "shan"),
         year = c("2009", "2014"),
-        tur = c("1", "2"),
-        formula = c("km", "kmSegmented", "km + km2", "kmLog")
+        # tur = c("1", "2"),
+        formula = c("km + tur", "kmSegmented + tur", "km + km2 + tur", "kmLog + tur")
     ) %>% 
     mutate(formula = paste0(resp, " ~ ", formula))
 
@@ -235,31 +235,42 @@ plots$s2_models.all <- gridExtra::grid.arrange(
 
 df1 <- res$models %>%
     filter(str_detect(formula, "Segmented"), resp != "abu") %>% 
-    select(resp, any_of(c("year", "tur")), pred) %>% 
-    unnest(pred)
+    select(resp, any_of(c("year", "tur", "yeartur")), pred) %>% 
+    unnest(pred) %>% 
+    mutate(
+        yeartur = paste0(year, "_", tur),
+        predicted = case_when(
+            resp == "abuLog" ~ 10^predicted - 1, 
+            TRUE ~ predicted)
+    )
 #     slice(1) %>% pull(pred)
 # %>% select(pred) 
 #     map(~.x %>% filter(str_detect(formula, "Segmented")) %>% select(pred) %>% ) %>% 
 #     mutate(time_id = paste0(tur, "t_", year))
     
 df2 <- div %>% 
-    transmute(year = as.character(year), tur = as.character(tur), km, abuLog, nsp, nsp100, shan) %>% 
-    pivot_longer(names_to = "response", values_to = "predicted", -km:-year) %>% 
-    # unite("time_id", tur, year, sep = "t_y")
-    mutate(time_id = paste0(tur, "t_", year))
-# plots$f2_models.selected <- 
-df1 %>% 
-    mutate(yeartur = paste0(year, "_", tur)) %>% 
-    ggplot(aes(x = km, y = predicted, fill = year, color = year)) +
-    # geom_point(size = 3, data = df2, alpha = 0.5, color = "black") +
-    geom_line() +
+    transmute(
+        year = as.character(year), 
+        tur = as.character(tur), 
+        yeartur = paste0(year, "_", tur),
+        km, abuLog, nsp, nsp100, shan) %>% 
+    pivot_longer(names_to = "resp", values_to = "predicted", -km:-year)  %>% 
+    mutate(
+        predicted = case_when(
+            resp == "abuLog" ~ 10^predicted - 1, 
+            TRUE ~ predicted)
+    )
+
+ggplot(mapping = aes(x = km, y = predicted, fill = yeartur, color = yeartur)) +
+    geom_point(size = 3, data = df2, alpha = 0.5, color = "black") +
+    geom_line(data = df1) +
     facet_grid(
         rows = vars(resp), 
         # cols = vars(tur), 
         scales = "free") +
     # scale_shape_manual(values = c(21, 24)) + 
     scale_x_continuous(limits = c(0.1, 32)) +
-    theme(panel.grid = element_blank()) +
+    theme(panel.grid = element_blank())
     # labs(y = NULL, x = "Distanse, km", shape = "Year: ", color = "Year: ", fill = "Year: ")
 if(!export){plots$f2_models.selected}
 
@@ -274,7 +285,7 @@ tables$ts3_models.all <- models %>%
 if(!export){tables$ts3_models.all }
 
 # Table 2. Models selected comparison
-tables$t2_mod.comps <- models %>% 
+tables$t2_mod.comps <- res$models %>% 
     `[`(-1) %>% 
     map(~.x %>% 
             filter(str_detect(formula, "Segment")) %>% 
