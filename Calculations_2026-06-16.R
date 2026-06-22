@@ -1,5 +1,5 @@
 export <- FALSE
-multip <- 2
+multip <- 1.96
 # Data load ---------------------------------------------------------------
 library(tidyverse)
 library(parallel)
@@ -261,12 +261,16 @@ df2 <- div %>%
             TRUE ~ predicted)
     )
 
-ggplot(mapping = aes(x = km, y = predicted, fill = yeartur, color = yeartur)) +
-    geom_point(size = 3, data = df2, alpha = 0.5, color = "black") +
+ggplot(mapping = aes(
+        x = km, y = predicted, 
+        linetype = year, 
+        shape = year,
+        fill = year, color = year)) +
+    geom_point(size = 2, data = df2, alpha = 0.5) + # color = "black"
     geom_line(data = df1) +
     facet_grid(
         rows = vars(resp), 
-        # cols = vars(tur), 
+        cols = vars(tur),
         scales = "free") +
     # scale_shape_manual(values = c(21, 24)) + 
     scale_x_continuous(limits = c(0.1, 32)) +
@@ -274,18 +278,39 @@ ggplot(mapping = aes(x = km, y = predicted, fill = yeartur, color = yeartur)) +
     # labs(y = NULL, x = "Distanse, km", shape = "Year: ", color = "Year: ", fill = "Year: ")
 if(!export){plots$f2_models.selected}
 
+
+
 # + Table S3. Models all
-tables$ts3_models.all <- models %>% 
-    map(~select(.x, formula, year, aic = aic2)) %>%
-    map_dfr(~mutate_if(.x, is.numeric, ~round(.x, 2))) %>% 
-    filter(str_detect(formula, "abu ~ ", negate = TRUE)) %>% 
-    separate(formula, into = c("predictor", "model"), sep = " ~ ") %>% 
-    pivot_wider(names_from = predictor, values_from = aic) %>% 
-    arrange(year, model)
+tables$ts3_models.all <- res$models %>% 
+    select(formula, year, aic = aic2, r2) %>% 
+    separate(formula, into = c("predictor", "model"), sep = " ~ ")
+
+
+    # filter(str_detect(formula, "abu ~ ", negate = TRUE)) %>%
+    # map(~dplyr::select(.x, formula, year, aic = aic2)) %>%
+    # map_dfr(~mutate_if(.x, is.numeric, ~round(.x, 2))) %>% 
+    # filter(str_detect(formula, "abu ~ ", negate = TRUE)) %>% 
+   
+    # pivot_wider(names_from = predictor, values_from = aic) %>% 
+    # arrange(year, model)
 if(!export){tables$ts3_models.all }
 
 # Table 2. Models selected comparison
-tables$t2_mod.comps <- res$models %>% 
+mod_selected <- res$models %>% 
+    filter(res$models$resp != "abu" & str_detect(res$models$formula, "Segmented")) %>% 
+    unite("id", formula, year, sep = "_")
+
+mod_selected %>% 
+    pull(fits) %>% 
+    `names<-`(str_remove_all(mod_selected$id, "Segmented \\+ tur" )) %>% 
+    map(~.x %>% 
+            summary %>% 
+            capture.output() %>% 
+            as.data.frame()
+        ) %>% 
+    writexl::write_xlsx("models.selected.xlsx")
+
+tables$t2_mod.comps <- res$models$fits %>% 
     `[`(-1) %>% 
     map(~.x %>% 
             filter(str_detect(formula, "Segment")) %>% 
